@@ -44,7 +44,7 @@ CUDA_HOME=/path/to/cuda PATH=/path/to/cuda/bin:$PATH \
   python -m pip install --no-build-isolation -r requirements-cuda.txt
 ```
 
-This optional extension is CUDA-only; CPU inference does not use it.
+This optional extension is CUDA-only; CPU inference deliberately uses the reference PyTorch implementation instead. The CPU mode disables CUDA-only kernels even when they are installed, so they cannot be accidentally selected for CPU tensors.
 
 The response contains the selected answer and probabilities. For example, support triage returns a suggested team, urgency, and whether the customer asks for a refund. Answers are model predictions, not guaranteed facts.
 

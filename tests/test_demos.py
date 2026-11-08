@@ -2,6 +2,8 @@
 
 import contextlib
 import io
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -108,6 +110,40 @@ class CommandLineTests(unittest.TestCase):
             local_files_only=True,
         )
         load.assert_called_once_with(cached_path, device="cpu")
+
+    def test_cpu_model_load_disables_cuda_kernels(self) -> None:
+        """CPU loading prevents CUDA-only kernels from being selected."""
+        sentinel = object()
+        missing = object()
+        module_names = ("fla", "causal_conv1d")
+        previous_modules = {
+            name: sys.modules.get(name, missing) for name in module_names
+        }
+
+        def verify_cpu_runtime(*args: object, **kwargs: object) -> Mock:
+            self.assertEqual(os.environ["THX02_DEVICE"], "cpu")
+            self.assertIsNone(sys.modules["fla"])
+            self.assertIsNone(sys.modules["causal_conv1d"])
+            return Mock()
+
+        try:
+            for name in module_names:
+                sys.modules[name] = sentinel
+            with (
+                patch.dict(os.environ, {"THX02_DEVICE": "cuda"}),
+                patch("huggingface_hub.snapshot_download", return_value="/tmp/thx02-cache"),
+                patch("thx02.THX02.load", side_effect=verify_cpu_runtime) as load,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                _load_model("cpu")
+                load.assert_called_once_with("/tmp/thx02-cache", device="cpu")
+        finally:
+            for name, previous in previous_modules.items():
+                if previous is missing:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = previous
+
 
     def test_model_load_downloads_when_cache_is_missing(self) -> None:
         """A missing cache triggers one download and loads the downloaded path."""

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -99,6 +100,12 @@ def _load_model(device: str) -> DecisionModel:
         import torch
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    os.environ["THX02_DEVICE"] = device
+    if device == "cpu":
+        # Transformers selects optional CUDA kernels at import time.
+        sys.modules["fla"] = None
+        sys.modules["causal_conv1d"] = None
 
     print(f"Loading THX-02 from the local cache on {device}.", file=sys.stderr)
     from thx02 import THX02
