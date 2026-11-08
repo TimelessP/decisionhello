@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from decisionhello.cli import _think_value, main
+from decisionhello.cli import MODEL_REPO, _load_model, main
 from decisionhello.demos import ALL_SCENARIOS, DEMO_SCENARIOS
 
 
@@ -31,39 +31,38 @@ class DemoScenarioTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
-    """Verify parser settings and API call wiring without network requests."""
+    """Verify parser settings and local model wiring without network requests."""
 
     def test_default_command_runs_support_demo(self) -> None:
-        """The no-options demo command uses support triage."""
-        client = Mock()
-        client.decide.return_value = {"answers": {}}
-        with patch("decisionhello.cli.Client", return_value=client):
+        """The default demo loads the local model and runs support triage."""
+        model = Mock()
+        model.decide.return_value = {"answers": {}}
+        with patch("decisionhello.cli._load_model", return_value=model) as load_model:
             self.assertEqual(main(["demo"]), 0)
-        self.assertEqual(client.decide.call_count, 1)
-        self.assertIsNone(client.decide.call_args.kwargs["images"])
-        self.assertEqual(client.decide.call_args.kwargs["think"], "auto")
+        load_model.assert_called_once_with("auto")
+        self.assertEqual(model.decide.call_count, 1)
+        self.assertIsNone(model.decide.call_args.kwargs["images"])
 
     def test_classify_requires_two_distinct_labels(self) -> None:
-        """Invalid label sets fail before making an API request."""
+        """Invalid label sets fail before loading the local model."""
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "photo.png"
             image.touch()
-            client = Mock()
             with self.assertRaises(SystemExit) as error:
-                with patch("decisionhello.cli.Client", return_value=client):
+                with patch("decisionhello.cli._load_model") as load_model:
                     with contextlib.redirect_stderr(io.StringIO()):
                         main(["classify", str(image), "--labels", "dog,dog"])
         self.assertEqual(error.exception.code, 2)
-        client.decide.assert_not_called()
+        load_model.assert_not_called()
 
     def test_classify_sends_image_and_custom_labels(self) -> None:
-        """A valid image classification forwards the chosen labels and path."""
+        """A valid classification forwards its image and labels to the local model."""
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "photo.png"
             image.touch()
-            client = Mock()
-            client.decide.return_value = {"answers": {}}
-            with patch("decisionhello.cli.Client", return_value=client):
+            model = Mock()
+            model.decide.return_value = {"answers": {}}
+            with patch("decisionhello.cli._load_model", return_value=model):
                 self.assertEqual(
                     main(
                         [
@@ -73,25 +72,62 @@ class CommandLineTests(unittest.TestCase):
                             "dog,cat,other",
                             "--question",
                             "Which animal is shown?",
+                            "--device",
+                            "cpu",
                         ]
                     ),
                     0,
                 )
-        self.assertEqual(client.decide.call_args.args[0], "Identify the main content in the supplied image.")
+        self.assertEqual(model.decide.call_args.args[0], "Identify the main content in the supplied image.")
         self.assertEqual(
-            client.decide.call_args.kwargs["images"],
+            model.decide.call_args.kwargs["images"],
             [str(image)],
         )
         self.assertEqual(
-            client.decide.call_args.args[1]["classification"]["criteria"],
+            model.decide.call_args.args[1]["classification"]["criteria"],
             {"dog": "dog", "cat": "cat", "other": "other"},
         )
+        with patch("decisionhello.cli._load_model", return_value=model) as load_model:
+            main(["demo", "--device", "cpu"])
+        load_model.assert_called_once_with("cpu")
 
-    def test_think_option_conversion(self) -> None:
-        """CLI values map to the client's supported thinking values."""
-        self.assertIs(_think_value("true"), True)
-        self.assertIs(_think_value("false"), False)
-        self.assertEqual(_think_value("auto"), "auto")
+    def test_model_load_checks_cache_before_downloading(self) -> None:
+        """A cached checkpoint is loaded from its local path without downloading."""
+        cached_path = "/tmp/thx02-cache"
+        with (
+            patch("huggingface_hub.snapshot_download", return_value=cached_path) as download,
+            patch("torch.cuda.is_available", return_value=False),
+            patch("thx02.THX02.load", return_value=Mock()) as load,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            _load_model("auto")
+
+        download.assert_called_once_with(
+            MODEL_REPO,
+            ignore_patterns=["thinker/*", "mobile/*", "assets/*"],
+            local_files_only=True,
+        )
+        load.assert_called_once_with(cached_path, device="cpu")
+
+    def test_model_load_downloads_when_cache_is_missing(self) -> None:
+        """A missing cache triggers one download and loads the downloaded path."""
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        downloaded_path = "/tmp/thx02-downloaded"
+        with (
+            patch(
+                "huggingface_hub.snapshot_download",
+                side_effect=[LocalEntryNotFoundError("missing"), downloaded_path],
+            ) as download,
+            patch("thx02.THX02.load", return_value=Mock()) as load,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            _load_model("cpu")
+
+        self.assertEqual(download.call_count, 2)
+        self.assertTrue(download.call_args_list[0].kwargs["local_files_only"])
+        self.assertNotIn("local_files_only", download.call_args_list[1].kwargs)
+        load.assert_called_once_with(downloaded_path, device="cpu")
 
 
 if __name__ == "__main__":

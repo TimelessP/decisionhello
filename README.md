@@ -1,10 +1,10 @@
 # decisionhello
 
-A small command-line playground for trying [HAL-X-AI/THX-02](https://huggingface.co/HAL-X-AI/THX-02), a model that answers typed decision questions about text and images. The demos include support-ticket triage, a chart, a spreadsheet, and object classification.
+A small command-line playground for trying [HAL-X-AI/THX-02](https://huggingface.co/HAL-X-AI/THX-02) locally, a model that answers typed decision questions about text and images. The demos include support-ticket triage, a chart, a spreadsheet, and object classification.
 
 ## Get started
 
-You need Python 3.12 and an internet connection to call the THX-02 API.
+You need Python 3.12. Installing the local runtime requires an internet connection and downloads PyTorch and other model dependencies. The first demo or classification run downloads about 9 GB of model files from Hugging Face; after that, inference runs locally from the cache without calling the HAL-X API or requiring internet access.
 
 ```bash
 git clone https://github.com/TimelessP/decisionhello.git
@@ -20,27 +20,37 @@ In PowerShell, activate the environment with:
 .\.venv\Scripts\Activate.ps1
 ```
 
-The HAL-X API key is optional on its free tier (which may be rate-limited by IP). If you have a key, set it in your shell; do not put it in source files:
-
-```bash
-export HALX_API_KEY="your-key"
-```
-
-```powershell
-$env:HALX_API_KEY = "your-key"
-```
-
-Run the first text demo:
+Run a text demo. On the first run, the model downloads to the Hugging Face cache; later runs use the cached files:
 
 ```bash
 python -m decisionhello demo --scenario support
 ```
 
+By default, the app uses CUDA when available and otherwise runs on CPU. Select a device explicitly if needed:
+
+```bash
+python -m decisionhello demo --scenario support --device cpu
+python -m decisionhello demo --scenario support --device cuda
+```
+
+The CPU option avoids requiring a CUDA GPU, but inference can be slower. The model weights require roughly 9 GB of disk space, in addition to the Python runtime and its dependencies.
+
+The requirements include Flash Linear Attention 0.6.0 for accelerated CUDA inference. This pins a newer version than THX-02's fast extra, whose 0.5.2 release fails to import with the current Torch/Triton stack. Triton may compile kernels on the first CUDA inference, so that first call can take longer than subsequent calls.
+
+For the optimized CUDA convolution kernel, install [`requirements-cuda.txt`](requirements-cuda.txt) after setting `CUDA_HOME` and `PATH` to a CUDA toolkit compatible with your installed PyTorch. The package builds a native extension, so install it without build isolation after the base requirements (including PyTorch) are installed:
+
+```bash
+CUDA_HOME=/path/to/cuda PATH=/path/to/cuda/bin:$PATH \
+  python -m pip install --no-build-isolation -r requirements-cuda.txt
+```
+
+This optional extension is CUDA-only; CPU inference does not use it.
+
 The response contains the selected answer and probabilities. For example, support triage returns a suggested team, urgency, and whether the customer asks for a refund. Answers are model predictions, not guaranteed facts.
 
 ## Try the image demos
 
-Each command sends one example image and its question to THX-02:
+Each command uses the local model and a checked-in example image:
 
 ```bash
 python -m decisionhello demo --scenario chart
@@ -58,13 +68,13 @@ The chart asks which quarter has the most units sold; the spreadsheet asks which
 
 Object examples: [dog](examples/images/dog.png), [bicycle](examples/images/bicycle.png), [mug](examples/images/mug.png).
 
-To run every included demo in sequence (six API requests):
+To run every included demo in sequence:
 
 ```bash
-python -m decisionhello demo --scenario all --think auto
+python -m decisionhello demo --scenario all
 ```
 
-`--think` accepts `false`, `auto`, or `true`; it defaults to `auto`. Thinking can add latency. Select a single scenario while exploring to avoid making unnecessary API requests.
+The local runtime does not include THX-02's optional thinking service.
 
 ## Classify your own image
 
@@ -76,7 +86,7 @@ python -m decisionhello classify path/to/photo.png --labels "dog,cat,wolf,other"
 python -m decisionhello classify path/to/photo.png --question "Which vehicle is shown?"
 ```
 
-The default labels are `dog,bicycle,mug,chart,spreadsheet,other`. The app sends the image to the THX-02 API; do not use it with private or sensitive images unless you are comfortable with the service's data handling.
+The default labels are `dog,bicycle,mug,chart,spreadsheet,other`. The image is processed locally and is not sent to the HAL-X API.
 
 ## Regenerate example images
 
@@ -96,6 +106,6 @@ python -m unittest discover -s tests -v
 
 ## How it works
 
-`thx02` is the official Python API client. The app supplies a state, one or more typed questions, and optionally an image path; the service returns answers and probability distributions. The example image generator uses Pillow. Dependency versions are pinned in `requirements.txt`.
+`thx02[local]` is the official Python package with its local model runtime. The app supplies a state, one or more typed questions, and optionally an image path; the model returns answers and probability distributions. Model files are cached by Hugging Face. The example image generator uses Pillow.
 
-The THX-02 model and API are provided by HAL-X and are separate from this MIT-licensed example application. See the [model card](https://huggingface.co/HAL-X-AI/THX-02) and [API documentation](https://api.hal-x.ai/docs/thx-02/) for model terms, service details, and limitations. This toy app is for experimentation, not consequential decisions.
+The THX-02 model is provided by HAL-X and is separate from this MIT-licensed example application. See the [model card](https://huggingface.co/HAL-X-AI/THX-02) for model terms, runtime details, and limitations. This toy app is for experimentation, not consequential decisions.
